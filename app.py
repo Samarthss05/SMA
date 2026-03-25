@@ -1,571 +1,550 @@
-import streamlit as st
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
+import streamlit as st
 
+st.set_page_config(page_title="Algorithmic Pricing Profit Optimizer", layout="wide")
 
-# =========================================================
-# Utility helpers
-# =========================================================
-def clip(value, low, high):
-    return max(low, min(high, value))
-
-
-def classify_regime(series: np.ndarray) -> str:
-    """
-    Rough automatic regime classification from the tail of a series.
-    """
-    tail = np.array(series[len(series) // 2 :], dtype=float)
-
-    if len(tail) < 10:
-        return "Too short"
-
-    rounded = np.round(tail, 3)
-    unique_count = len(np.unique(rounded))
-    std_val = np.std(tail)
-
-    if std_val < 0.01:
-        return "Stable"
-    if unique_count <= 6:
-        return "Cycle-like"
-    return "Chaos-like"
-
-
-# =========================================================
-# Consumer population generation
-# =========================================================
-def generate_consumers(n_consumers: int, seed: int = 42):
-    """
-    Create heterogeneous consumers:
-    - budget
-    - regular
-    - premium
-
-    Each consumer has:
-    - base_wtp
-    - shopping frequency
-    - loyalty bias toward our bot
-    """
-    rng = np.random.default_rng(seed)
-
-    segments = rng.choice(
-        ["budget", "regular", "premium"],
-        size=n_consumers,
-        p=[0.35, 0.45, 0.20]
-    )
-
-    base_wtp = np.zeros(n_consumers)
-    shop_prob = np.zeros(n_consumers)
-    loyalty = np.zeros(n_consumers)
-
-    for i, seg in enumerate(segments):
-        if seg == "budget":
-            base_wtp[i] = clip(rng.normal(0.35, 0.08), 0.05, 0.95)
-            shop_prob[i] = clip(rng.normal(0.30, 0.05), 0.05, 0.95)
-            loyalty[i] = clip(rng.normal(0.02, 0.03), -0.08, 0.12)
-
-        elif seg == "regular":
-            base_wtp[i] = clip(rng.normal(0.55, 0.10), 0.05, 0.95)
-            shop_prob[i] = clip(rng.normal(0.45, 0.08), 0.05, 0.95)
-            loyalty[i] = clip(rng.normal(0.04, 0.04), -0.10, 0.15)
-
-        else:  # premium
-            base_wtp[i] = clip(rng.normal(0.75, 0.10), 0.05, 0.99)
-            shop_prob[i] = clip(rng.normal(0.60, 0.08), 0.05, 0.99)
-            loyalty[i] = clip(rng.normal(0.06, 0.05), -0.10, 0.20)
-
-    return {
-        "segment": segments,
-        "base_wtp": base_wtp,
-        "shop_prob": shop_prob,
-        "loyalty": loyalty
-    }
-
-
-# =========================================================
-# Core brief model
-# =========================================================
-def run_core_brief_model(n_consumers, r, initial_price, n_days, seed=42):
-    """
-    Exact brief-style model:
-    1. Publish Price_t
-    2. Consumer buys if Price_t <= WTP_i
-    3. Demand_t = buyers / N
-    4. Price_{t+1} = r * Price_t * Demand_t
-    """
-    rng = np.random.default_rng(seed)
-    wtp = rng.uniform(0.0, 1.0, n_consumers)
-
-    prices = []
-    demands = []
-    buyers_hist = []
-    revenues = []
-    profits = []
-
-    price = initial_price
-    unit_cost = 0.20
-
-    for _ in range(n_days):
-        buyers = int(np.sum(wtp >= price))
-        demand = buyers / n_consumers
-
-        revenue = price * buyers
-        profit = (price - unit_cost) * buyers
-
-        prices.append(price)
-        demands.append(demand)
-        buyers_hist.append(buyers)
-        revenues.append(revenue)
-        profits.append(profit)
-
-        next_price = r * price * demand
-        price = clip(next_price, 0.0, 1.0)
-
-    df = pd.DataFrame({
-        "day": np.arange(1, n_days + 1),
-        "our_price": prices,
-        "our_demand": demands,
-        "our_buyers": buyers_hist,
-        "our_revenue": revenues,
-        "our_profit": profits
-    })
-
-    return df
-
-
-# =========================================================
-# Enhanced ABM
-# =========================================================
-def run_enhanced_abm(
-    n_consumers=1000,
-    n_days=180,
-    our_r=2.0,
-    initial_our_price=0.50,
-    enable_competitor=True,
-    competitor_r=1.6,
-    initial_comp_price=0.48,
-    target_demand=0.28,
-    season_amp=0.10,
-    shock_std=0.03,
-    unit_cost=0.20,
-    seed=42
-):
-    """
-    Enhanced ABM:
-    - heterogeneous consumers
-    - shopping probability
-    - dynamic WTP via seasonality + shocks
-    - optional competitor
-    - our pricing bot updates based on realized demand
-    - competitor can also adapt
-    - concrete outputs: revenue, profit, market share, surplus, volatility
-    """
-    rng = np.random.default_rng(seed)
-    consumers = generate_consumers(n_consumers=n_consumers, seed=seed)
-
-    base_wtp = consumers["base_wtp"]
-    shop_prob = consumers["shop_prob"]
-    loyalty = consumers["loyalty"]
-
-    our_price = initial_our_price
-    comp_price = initial_comp_price
-
-    records = []
-
-    for day in range(1, n_days + 1):
-        # Seasonality and demand shock
-        season_factor = 1.0 + season_amp * np.sin(2 * np.pi * day / 30.0)
-        market_shock = float(rng.normal(0.0, shock_std))
-
-        # Which consumers are active today
-        active_prob = np.clip(shop_prob * season_factor, 0.01, 0.99)
-        is_active = rng.random(n_consumers) < active_prob
-        active_count = int(np.sum(is_active))
-
-        # Dynamic WTP for active consumers
-        daily_wtp = np.clip(
-            base_wtp + rng.normal(0.0, 0.04, n_consumers) + market_shock,
-            0.01,
-            1.20
-        )
-
-        our_buyers = 0
-        comp_buyers = 0
-        no_buyers = 0
-
-        our_surplus_total = 0.0
-        comp_surplus_total = 0.0
-
-        for i in range(n_consumers):
-            if not is_active[i]:
-                continue
-
-            # Utility from our store vs competitor
-            our_utility = daily_wtp[i] - our_price + loyalty[i]
-            comp_utility = daily_wtp[i] - comp_price
-
-            if enable_competitor:
-                if our_utility > 0 and our_utility >= comp_utility:
-                    our_buyers += 1
-                    our_surplus_total += our_utility
-                elif comp_utility > 0:
-                    comp_buyers += 1
-                    comp_surplus_total += comp_utility
-                else:
-                    no_buyers += 1
-            else:
-                if our_utility > 0:
-                    our_buyers += 1
-                    our_surplus_total += our_utility
-                else:
-                    no_buyers += 1
-
-        total_buyers = our_buyers + comp_buyers
-        our_demand = our_buyers / n_consumers
-        comp_demand = comp_buyers / n_consumers if enable_competitor else 0.0
-        our_share = our_buyers / total_buyers if total_buyers > 0 else 0.0
-
-        our_revenue = our_price * our_buyers
-        our_profit = (our_price - unit_cost) * our_buyers
-
-        comp_revenue = comp_price * comp_buyers if enable_competitor else 0.0
-        comp_profit = (comp_price - unit_cost) * comp_buyers if enable_competitor else 0.0
-
-        avg_our_surplus = our_surplus_total / our_buyers if our_buyers > 0 else 0.0
-
-        records.append({
-            "day": day,
-            "active_consumers": active_count,
-            "our_price": our_price,
-            "comp_price": comp_price if enable_competitor else np.nan,
-            "our_buyers": our_buyers,
-            "comp_buyers": comp_buyers,
-            "no_buyers": no_buyers,
-            "our_demand": our_demand,
-            "comp_demand": comp_demand,
-            "our_market_share": our_share,
-            "our_revenue": our_revenue,
-            "our_profit": our_profit,
-            "comp_revenue": comp_revenue,
-            "comp_profit": comp_profit,
-            "avg_our_surplus": avg_our_surplus,
-            "season_factor": season_factor,
-            "market_shock": market_shock
-        })
-
-        # ---------------------------
-        # Price update rules
-        # ---------------------------
-        # If our observed demand > target demand, we increase price.
-        # If observed demand < target demand, we decrease price.
-        demand_error = our_demand - target_demand
-
-        if enable_competitor:
-            competitor_gap = comp_price - our_price
-        else:
-            competitor_gap = 0.0
-
-        raw_next_our = our_price * np.exp(
-            our_r * demand_error + 0.25 * competitor_gap
-        )
-        our_price = clip(raw_next_our, 0.05, 1.20)
-
-        if enable_competitor:
-            comp_error = comp_demand - target_demand
-            raw_next_comp = comp_price * np.exp(
-                competitor_r * comp_error + 0.20 * (our_price - comp_price)
-            )
-            comp_price = clip(raw_next_comp, 0.05, 1.20)
-
-    df = pd.DataFrame(records)
-    return df
-
-
-# =========================================================
-# Automated experiments
-# =========================================================
-def summarize_run(df: pd.DataFrame):
-    """
-    Summarize one simulation run.
-    """
-    tail = df.iloc[len(df) // 2 :]
-
-    summary = {
-        "avg_price": df["our_price"].mean(),
-        "avg_demand": df["our_demand"].mean(),
-        "avg_revenue": df["our_revenue"].mean(),
-        "avg_profit": df["our_profit"].mean(),
-        "avg_market_share": df["our_market_share"].mean() if "our_market_share" in df else np.nan,
-        "avg_surplus": df["avg_our_surplus"].mean() if "avg_our_surplus" in df else np.nan,
-        "price_volatility": df["our_price"].std(),
-        "profit_volatility": df["our_profit"].std(),
-        "tail_price_volatility": tail["our_price"].std(),
-        "regime": classify_regime(df["our_price"].values)
-    }
-    return summary
-
-
-def run_parameter_sweep(
-    model_mode,
-    r_values,
-    seeds,
-    n_consumers,
-    n_days,
-    initial_price,
-    enable_competitor,
-    competitor_r,
-    season_amp,
-    shock_std,
-    target_demand
-):
-    """
-    Run multiple simulations automatically across many r values and seeds.
-    """
-    rows = []
-
-    for r in r_values:
-        for seed in seeds:
-            if model_mode == "Core Brief":
-                df = run_core_brief_model(
-                    n_consumers=n_consumers,
-                    r=r,
-                    initial_price=initial_price,
-                    n_days=n_days,
-                    seed=seed
-                )
-                summary = {
-                    "avg_market_share": np.nan,
-                    "avg_surplus": np.nan
-                }
-            else:
-                df = run_enhanced_abm(
-                    n_consumers=n_consumers,
-                    n_days=n_days,
-                    our_r=r,
-                    initial_our_price=initial_price,
-                    enable_competitor=enable_competitor,
-                    competitor_r=competitor_r,
-                    target_demand=target_demand,
-                    season_amp=season_amp,
-                    shock_std=shock_std,
-                    seed=seed
-                )
-                summary = {}
-
-            s = summarize_run(df)
-            summary.update(s)
-
-            rows.append({
-                "r": r,
-                "seed": seed,
-                **summary
-            })
-
-    results = pd.DataFrame(rows)
-
-    grouped = (
-        results
-        .groupby("r", as_index=False)
-        .agg(
-            avg_price=("avg_price", "mean"),
-            avg_demand=("avg_demand", "mean"),
-            avg_revenue=("avg_revenue", "mean"),
-            avg_profit=("avg_profit", "mean"),
-            avg_market_share=("avg_market_share", "mean"),
-            avg_surplus=("avg_surplus", "mean"),
-            price_volatility=("price_volatility", "mean"),
-            tail_price_volatility=("tail_price_volatility", "mean")
-        )
-    )
-
-    # Simple stability score: higher is better
-    grouped["stability_score"] = grouped["avg_profit"] - 120 * grouped["tail_price_volatility"]
-
-    return results, grouped
-
-
-# =========================================================
-# Plotting
-# =========================================================
-def plot_time_series(df: pd.DataFrame, show_competitor: bool):
-    fig, ax = plt.subplots(figsize=(11, 5))
-    ax.plot(df["day"], df["our_price"], label="Our price")
-    if show_competitor and "comp_price" in df.columns:
-        ax.plot(df["day"], df["comp_price"], label="Competitor price", alpha=0.85)
-    ax.set_title("Price Over Time")
-    ax.set_xlabel("Day")
-    ax.set_ylabel("Price")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
-    return fig
-
-
-def plot_demand_profit(df: pd.DataFrame):
-    fig, ax = plt.subplots(figsize=(11, 5))
-    ax.plot(df["day"], df["our_demand"], label="Our demand")
-    ax.plot(df["day"], df["our_profit"], label="Our profit")
-    ax.set_title("Demand and Profit Over Time")
-    ax.set_xlabel("Day")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
-    return fig
-
-
-def plot_sweep(grouped: pd.DataFrame):
-    fig, ax = plt.subplots(figsize=(11, 5))
-    ax.plot(grouped["r"], grouped["avg_profit"], label="Average profit")
-    ax.plot(grouped["r"], grouped["tail_price_volatility"], label="Tail price volatility")
-    ax.plot(grouped["r"], grouped["stability_score"], label="Stability score")
-    ax.set_title("Automated Sweep Across r")
-    ax.set_xlabel("r")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
-    return fig
-
-
-# =========================================================
-# Streamlit app
-# =========================================================
-st.set_page_config(page_title="Volatility Loop ABM - Enhanced", layout="wide")
-st.title("Volatility Loop: Enhanced Agent-Based Market Simulation")
-
+st.title("Algorithmic Pricing Simulation + Profit Optimization")
 st.markdown(
-    """
-This version gives you **concrete outputs**, not just a toy plot:
-- revenue
-- profit
-- market share
-- consumer surplus
-- volatility
-- automatic regime classification
-- automated parameter sweeps over `r`
+    r"""
+This app simulates a market where:
+- a pricing bot publishes a price at time **t**
+- consumers buy if **price <= willingness-to-pay**
+- demand is observed
+- the bot updates price using
+
+\[
+P_{t+1} = r \cdot P_t \cdot Demand_t
+\]
+
+It also adds **profit analysis** and scans across different values of **r**
+to find the setting that gives the **highest long-run profit**.
 """
 )
 
-with st.sidebar:
-    st.header("Model mode")
-    model_mode = st.radio("Choose model", ["Core Brief", "Enhanced ABM"])
+# ----------------------------
+# Helpers
+# ----------------------------
+def generate_wtp(n, distribution="uniform", seed=42):
+    rng = np.random.default_rng(seed)
 
-    st.header("Base settings")
-    n_consumers = st.slider("Consumers", 200, 5000, 1000, step=100)
-    n_days = st.slider("Days", 60, 365, 180, step=10)
-    initial_price = st.slider("Initial price", 0.05, 1.00, 0.50, step=0.01)
-    our_r = st.slider("Our aggressiveness r", 0.1, 4.0, 2.0, step=0.05)
-    seed = st.number_input("Random seed", 0, 999999, 42, 1)
-
-    enable_competitor = False
-    competitor_r = 1.6
-    season_amp = 0.10
-    shock_std = 0.03
-    target_demand = 0.28
-
-    if model_mode == "Enhanced ABM":
-        st.header("Enhanced market features")
-        enable_competitor = st.checkbox("Enable competitor bot", value=True)
-        competitor_r = st.slider("Competitor aggressiveness", 0.1, 4.0, 1.6, step=0.05)
-        season_amp = st.slider("Seasonality amplitude", 0.00, 0.30, 0.10, step=0.01)
-        shock_std = st.slider("Shock standard deviation", 0.00, 0.10, 0.03, step=0.01)
-        target_demand = st.slider("Target demand", 0.05, 0.60, 0.28, step=0.01)
-
-    st.header("Automated sweep")
-    sweep_min = st.slider("Sweep r min", 0.1, 4.0, 0.5, step=0.1)
-    sweep_max = st.slider("Sweep r max", 0.1, 4.0, 3.5, step=0.1)
-    sweep_points = st.slider("Number of r values", 5, 40, 20, step=1)
-    sweep_runs = st.slider("Seeds per r", 1, 10, 4, step=1)
-
-run_single = st.button("Run single simulation")
-run_sweep = st.button("Run automated sweep")
-
-if run_single:
-    if model_mode == "Core Brief":
-        df = run_core_brief_model(
-            n_consumers=n_consumers,
-            r=our_r,
-            initial_price=initial_price,
-            n_days=n_days,
-            seed=seed
-        )
-        show_comp = False
+    if distribution == "uniform":
+        wtp = rng.uniform(0.0, 1.0, n)
+    elif distribution == "normal":
+        wtp = rng.normal(loc=0.55, scale=0.18, size=n)
+        wtp = np.clip(wtp, 0.0, 1.0)
+    elif distribution == "beta":
+        wtp = rng.beta(a=2.0, b=2.5, size=n)
     else:
-        df = run_enhanced_abm(
+        wtp = rng.uniform(0.0, 1.0, n)
+
+    return wtp
+
+
+def seasonal_multiplier(t, amplitude=0.0, period=30):
+    return 1.0 + amplitude * np.sin(2 * np.pi * t / period)
+
+
+def run_simulation(
+    r=2.0,
+    n_consumers=1000,
+    steps=200,
+    initial_price=0.5,
+    distribution="uniform",
+    seed=42,
+    dynamic_wtp=False,
+    wtp_noise=0.02,
+    use_seasonality=False,
+    season_amplitude=0.0,
+    season_period=30,
+    clip_price=True,
+    unit_cost=0.20,
+    fixed_cost_per_step=0.0,
+):
+    rng = np.random.default_rng(seed)
+    base_wtp = generate_wtp(n_consumers, distribution=distribution, seed=seed)
+    current_wtp = base_wtp.copy()
+
+    prices = np.zeros(steps + 1)
+    demands = np.zeros(steps)
+    buyers = np.zeros(steps, dtype=int)
+    revenue = np.zeros(steps)
+    cost = np.zeros(steps)
+    profit = np.zeros(steps)
+
+    prices[0] = initial_price
+
+    for t in range(steps):
+        current_price = prices[t]
+
+        if use_seasonality:
+            effective_price = current_price / seasonal_multiplier(
+                t, amplitude=season_amplitude, period=season_period
+            )
+        else:
+            effective_price = current_price
+
+        buy_mask = effective_price <= current_wtp
+        buyers[t] = buy_mask.sum()
+        demands[t] = buyers[t] / n_consumers
+
+        units_sold = buyers[t]
+        revenue[t] = current_price * units_sold
+        cost[t] = unit_cost * units_sold + fixed_cost_per_step
+        profit[t] = revenue[t] - cost[t]
+
+        next_price = r * current_price * demands[t]
+
+        if clip_price:
+            next_price = np.clip(next_price, 0.0, 1.5)
+
+        prices[t + 1] = next_price
+
+        if dynamic_wtp:
+            noise = rng.normal(0.0, wtp_noise, size=n_consumers)
+            current_wtp = np.clip(current_wtp + noise, 0.0, 1.0)
+
+    cumulative_profit = np.cumsum(profit)
+
+    return {
+        "prices": prices,
+        "demands": demands,
+        "buyers": buyers,
+        "revenue": revenue,
+        "cost": cost,
+        "profit": profit,
+        "cumulative_profit": cumulative_profit,
+        "base_wtp": base_wtp,
+    }
+
+
+def classify_regime(prices, transient_fraction=0.5):
+    start = int(len(prices) * transient_fraction)
+    tail = prices[start:]
+
+    if len(tail) < 10:
+        return "Insufficient data"
+
+    tail_std = np.std(tail)
+    rounded_unique = len(np.unique(np.round(tail, 3)))
+
+    if tail_std < 0.005:
+        return "Stable / Convergent"
+    elif rounded_unique <= 8:
+        return "Cyclical / Periodic"
+    else:
+        return "Chaos-like / Irregular"
+
+
+def compute_bifurcation(
+    r_values,
+    n_consumers=1000,
+    steps=300,
+    keep_last=80,
+    initial_price=0.5,
+    distribution="uniform",
+    seed=42,
+    dynamic_wtp=False,
+    wtp_noise=0.02,
+    use_seasonality=False,
+    season_amplitude=0.0,
+    season_period=30,
+    unit_cost=0.20,
+    fixed_cost_per_step=0.0,
+):
+    xs = []
+    ys = []
+
+    for r in r_values:
+        result = run_simulation(
+            r=r,
             n_consumers=n_consumers,
-            n_days=n_days,
-            our_r=our_r,
-            initial_our_price=initial_price,
-            enable_competitor=enable_competitor,
-            competitor_r=competitor_r,
-            target_demand=target_demand,
-            season_amp=season_amp,
-            shock_std=shock_std,
-            seed=seed
+            steps=steps,
+            initial_price=initial_price,
+            distribution=distribution,
+            seed=seed,
+            dynamic_wtp=dynamic_wtp,
+            wtp_noise=wtp_noise,
+            use_seasonality=use_seasonality,
+            season_amplitude=season_amplitude,
+            season_period=season_period,
+            unit_cost=unit_cost,
+            fixed_cost_per_step=fixed_cost_per_step,
         )
-        show_comp = enable_competitor
+        tail = result["prices"][-keep_last:]
+        xs.extend([r] * len(tail))
+        ys.extend(tail.tolist())
 
-    summary = summarize_run(df)
+    return np.array(xs), np.array(ys)
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Average profit", f"{summary['avg_profit']:.2f}")
-    col2.metric("Average revenue", f"{summary['avg_revenue']:.2f}")
-    col3.metric("Price volatility", f"{summary['price_volatility']:.4f}")
-    col4.metric("Regime", summary["regime"])
 
-    if model_mode == "Enhanced ABM":
-        col5, col6, col7 = st.columns(3)
-        col5.metric("Average market share", f"{summary['avg_market_share']:.3f}")
-        col6.metric("Average consumer surplus", f"{summary['avg_surplus']:.3f}")
-        col7.metric("Tail volatility", f"{summary['tail_price_volatility']:.4f}")
+def optimize_r(
+    r_min,
+    r_max,
+    num_r,
+    n_consumers,
+    steps,
+    initial_price,
+    distribution,
+    seed,
+    dynamic_wtp,
+    wtp_noise,
+    use_seasonality,
+    season_amplitude,
+    season_period,
+    unit_cost,
+    fixed_cost_per_step,
+):
+    r_values = np.linspace(r_min, r_max, num_r)
+    rows = []
 
-    st.pyplot(plot_time_series(df, show_competitor=show_comp))
-    st.pyplot(plot_demand_profit(df))
+    for r in r_values:
+        result = run_simulation(
+            r=float(r),
+            n_consumers=n_consumers,
+            steps=steps,
+            initial_price=initial_price,
+            distribution=distribution,
+            seed=seed,
+            dynamic_wtp=dynamic_wtp,
+            wtp_noise=wtp_noise,
+            use_seasonality=use_seasonality,
+            season_amplitude=season_amplitude,
+            season_period=season_period,
+            unit_cost=unit_cost,
+            fixed_cost_per_step=fixed_cost_per_step,
+        )
 
-    st.subheader("Simulation table")
-    st.dataframe(df, use_container_width=True)
+        tail_start = max(1, int(steps * 0.5))
+        avg_profit = float(np.mean(result["profit"][tail_start:]))
+        total_profit = float(np.sum(result["profit"]))
+        volatility = float(np.std(result["prices"][tail_start:]))
+        avg_price = float(np.mean(result["prices"][tail_start:]))
+        avg_demand = float(np.mean(result["demands"][tail_start:]))
+        regime = classify_regime(result["prices"])
 
-    st.download_button(
-        label="Download simulation CSV",
-        data=df.to_csv(index=False).encode("utf-8"),
-        file_name="simulation_output.csv",
-        mime="text/csv"
-    )
+        rows.append(
+            {
+                "r": float(r),
+                "avg_profit_long_run": avg_profit,
+                "total_profit": total_profit,
+                "price_volatility": volatility,
+                "avg_price": avg_price,
+                "avg_demand": avg_demand,
+                "regime": regime,
+            }
+        )
 
-if run_sweep:
-    r_values = np.linspace(sweep_min, sweep_max, sweep_points)
-    seeds = list(range(100, 100 + sweep_runs))
+    rows = sorted(rows, key=lambda x: x["avg_profit_long_run"], reverse=True)
+    return rows
 
-    raw_results, grouped_results = run_parameter_sweep(
-        model_mode=model_mode,
-        r_values=r_values,
-        seeds=seeds,
+
+# ----------------------------
+# Sidebar controls
+# ----------------------------
+st.sidebar.header("Simulation Controls")
+
+r = st.sidebar.slider("Aggression parameter r", min_value=0.0, max_value=4.0, value=2.0, step=0.01)
+n_consumers = st.sidebar.slider("Number of consumers", min_value=100, max_value=5000, value=1000, step=100)
+steps = st.sidebar.slider("Number of time steps", min_value=50, max_value=1000, value=250, step=10)
+initial_price = st.sidebar.slider("Initial price P₀", min_value=0.01, max_value=1.0, value=0.5, step=0.01)
+distribution = st.sidebar.selectbox("WTP distribution", options=["uniform", "normal", "beta"])
+seed = st.sidebar.number_input("Random seed", min_value=0, max_value=999999, value=42, step=1)
+
+st.sidebar.subheader("Profit Assumptions")
+unit_cost = st.sidebar.slider("Unit cost", min_value=0.0, max_value=1.0, value=0.20, step=0.01)
+fixed_cost_per_step = st.sidebar.slider("Fixed cost per step", min_value=0.0, max_value=500.0, value=0.0, step=5.0)
+
+st.sidebar.subheader("Optional extensions")
+dynamic_wtp = st.sidebar.checkbox("Dynamic WTP over time", value=False)
+wtp_noise = st.sidebar.slider("WTP noise level", min_value=0.0, max_value=0.2, value=0.02, step=0.005)
+
+use_seasonality = st.sidebar.checkbox("Use seasonality", value=False)
+season_amplitude = st.sidebar.slider("Seasonality amplitude", min_value=0.0, max_value=0.5, value=0.15, step=0.01)
+season_period = st.sidebar.slider("Seasonality period", min_value=5, max_value=120, value=30, step=1)
+
+run_button = st.sidebar.button("Run simulation", type="primary")
+show_bifurcation = st.sidebar.checkbox("Show bifurcation plot", value=True)
+
+st.sidebar.subheader("Optimize r for Profit")
+opt_r_min = st.sidebar.slider("Optimization r min", min_value=0.0, max_value=4.0, value=0.1, step=0.1)
+opt_r_max = st.sidebar.slider("Optimization r max", min_value=0.1, max_value=4.0, value=4.0, step=0.1)
+opt_num_r = st.sidebar.slider("Optimization grid size", min_value=10, max_value=200, value=60, step=5)
+run_optimization = st.sidebar.button("Find best r")
+
+# ----------------------------
+# Run simulation
+# ----------------------------
+if run_button or "already_ran" not in st.session_state:
+    st.session_state["already_ran"] = True
+    result = run_simulation(
+        r=r,
         n_consumers=n_consumers,
-        n_days=n_days,
+        steps=steps,
         initial_price=initial_price,
-        enable_competitor=enable_competitor,
-        competitor_r=competitor_r,
-        season_amp=season_amp,
-        shock_std=shock_std,
-        target_demand=target_demand
+        distribution=distribution,
+        seed=seed,
+        dynamic_wtp=dynamic_wtp,
+        wtp_noise=wtp_noise,
+        use_seasonality=use_seasonality,
+        season_amplitude=season_amplitude,
+        season_period=season_period,
+        unit_cost=unit_cost,
+        fixed_cost_per_step=fixed_cost_per_step,
     )
+    st.session_state["result"] = result
 
-    best_row = grouped_results.loc[grouped_results["stability_score"].idxmax()]
+result = st.session_state["result"]
 
-    st.subheader("Best r from automated sweep")
-    st.write(
-        f"Best `r` by stability score: **{best_row['r']:.2f}**  |  "
-        f"Average profit: **{best_row['avg_profit']:.2f}**  |  "
-        f"Tail volatility: **{best_row['tail_price_volatility']:.4f}**"
-    )
+prices = result["prices"]
+demands = result["demands"]
+buyers = result["buyers"]
+profit = result["profit"]
+cumulative_profit = result["cumulative_profit"]
 
-    st.pyplot(plot_sweep(grouped_results))
+tail_start_price = int(len(prices) * 0.5)
+tail_start_profit = int(len(profit) * 0.5)
 
-    st.subheader("Grouped sweep results")
-    st.dataframe(grouped_results, use_container_width=True)
+price_volatility = float(np.std(prices[tail_start_price:]))
+demand_volatility = float(np.std(demands[tail_start_profit:]))
+avg_price = float(np.mean(prices[tail_start_price:]))
+avg_demand = float(np.mean(demands[tail_start_profit:]))
+avg_profit = float(np.mean(profit[tail_start_profit:]))
+total_profit = float(np.sum(profit))
+regime = classify_regime(prices)
 
-    st.subheader("Raw sweep results")
-    st.dataframe(raw_results, use_container_width=True)
+# ----------------------------
+# KPIs
+# ----------------------------
+col1, col2, col3, col4, col5, col6 = st.columns(6)
+col1.metric("Regime", regime)
+col2.metric("Price volatility", f"{price_volatility:.4f}")
+col3.metric("Avg long-run price", f"{avg_price:.4f}")
+col4.metric("Avg long-run demand", f"{avg_demand:.4f}")
+col5.metric("Avg long-run profit", f"{avg_profit:.2f}")
+col6.metric("Total profit", f"{total_profit:.2f}")
 
-    st.download_button(
-        label="Download grouped sweep CSV",
-        data=grouped_results.to_csv(index=False).encode("utf-8"),
-        file_name="grouped_sweep_results.csv",
-        mime="text/csv"
-    )
+# ----------------------------
+# Charts
+# ----------------------------
+row1_col1, row1_col2 = st.columns(2)
+
+with row1_col1:
+    fig1, ax1 = plt.subplots(figsize=(8, 4.5))
+    ax1.plot(prices, linewidth=1.5)
+    ax1.set_title("Price Time Series")
+    ax1.set_xlabel("Time step")
+    ax1.set_ylabel("Price")
+    ax1.grid(True, alpha=0.3)
+    st.pyplot(fig1)
+
+with row1_col2:
+    fig2, ax2 = plt.subplots(figsize=(8, 4.5))
+    ax2.plot(range(len(demands)), demands, linewidth=1.5)
+    ax2.set_title("Demand Time Series")
+    ax2.set_xlabel("Time step")
+    ax2.set_ylabel("Demand")
+    ax2.grid(True, alpha=0.3)
+    st.pyplot(fig2)
+
+row2_col1, row2_col2 = st.columns(2)
+
+with row2_col1:
+    fig3, ax3 = plt.subplots(figsize=(8, 4.5))
+    ax3.plot(range(len(profit)), profit, linewidth=1.5)
+    ax3.set_title("Profit Per Time Step")
+    ax3.set_xlabel("Time step")
+    ax3.set_ylabel("Profit")
+    ax3.grid(True, alpha=0.3)
+    st.pyplot(fig3)
+
+with row2_col2:
+    fig4, ax4 = plt.subplots(figsize=(8, 4.5))
+    ax4.plot(range(len(cumulative_profit)), cumulative_profit, linewidth=1.5)
+    ax4.set_title("Cumulative Profit")
+    ax4.set_xlabel("Time step")
+    ax4.set_ylabel("Cumulative profit")
+    ax4.grid(True, alpha=0.3)
+    st.pyplot(fig4)
+
+row3_col1, row3_col2 = st.columns(2)
+
+with row3_col1:
+    fig5, ax5 = plt.subplots(figsize=(8, 4.5))
+    ax5.hist(result["base_wtp"], bins=30)
+    ax5.set_title("Consumer WTP Distribution")
+    ax5.set_xlabel("WTP")
+    ax5.set_ylabel("Number of consumers")
+    ax5.grid(True, alpha=0.3)
+    st.pyplot(fig5)
+
+with row3_col2:
+    fig6, ax6 = plt.subplots(figsize=(8, 4.5))
+    ax6.scatter(prices[:-1], profit, s=10, alpha=0.7)
+    ax6.set_title("Profit vs Published Price")
+    ax6.set_xlabel("Published price")
+    ax6.set_ylabel("Profit")
+    ax6.grid(True, alpha=0.3)
+    st.pyplot(fig6)
+
+# ----------------------------
+# Bifurcation plot
+# ----------------------------
+if show_bifurcation:
+    st.subheader("Bifurcation-Style Summary Plot")
+
+    bif_col1, bif_col2, bif_col3 = st.columns(3)
+    with bif_col1:
+        r_min = st.slider("r min", min_value=0.0, max_value=4.0, value=0.0, step=0.1, key="rmin")
+    with bif_col2:
+        r_max = st.slider("r max", min_value=0.1, max_value=4.0, value=4.0, step=0.1, key="rmax")
+    with bif_col3:
+        num_r = st.slider("Number of r values", min_value=20, max_value=300, value=120, step=10, key="numr")
+
+    if r_max <= r_min:
+        st.warning("Please keep r max greater than r min.")
+    else:
+        r_values = np.linspace(r_min, r_max, num_r)
+        xs, ys = compute_bifurcation(
+            r_values=r_values,
+            n_consumers=n_consumers,
+            steps=max(steps, 250),
+            keep_last=min(80, max(30, steps // 3)),
+            initial_price=initial_price,
+            distribution=distribution,
+            seed=seed,
+            dynamic_wtp=dynamic_wtp,
+            wtp_noise=wtp_noise,
+            use_seasonality=use_seasonality,
+            season_amplitude=season_amplitude,
+            season_period=season_period,
+            unit_cost=unit_cost,
+            fixed_cost_per_step=fixed_cost_per_step,
+        )
+
+        fig7, ax7 = plt.subplots(figsize=(10, 5))
+        ax7.scatter(xs, ys, s=1, alpha=0.5)
+        ax7.set_title("Bifurcation-Style Plot: Long-Run Price vs r")
+        ax7.set_xlabel("Aggression parameter r")
+        ax7.set_ylabel("Long-run price values")
+        ax7.grid(True, alpha=0.3)
+        st.pyplot(fig7)
+
+# ----------------------------
+# Optimization
+# ----------------------------
+st.subheader("Profit Optimization Over r")
+
+if run_optimization:
+    if opt_r_max <= opt_r_min:
+        st.error("Optimization r max must be greater than r min.")
+    else:
+        ranking = optimize_r(
+            r_min=opt_r_min,
+            r_max=opt_r_max,
+            num_r=opt_num_r,
+            n_consumers=n_consumers,
+            steps=steps,
+            initial_price=initial_price,
+            distribution=distribution,
+            seed=seed,
+            dynamic_wtp=dynamic_wtp,
+            wtp_noise=wtp_noise,
+            use_seasonality=use_seasonality,
+            season_amplitude=season_amplitude,
+            season_period=season_period,
+            unit_cost=unit_cost,
+            fixed_cost_per_step=fixed_cost_per_step,
+        )
+
+        best = ranking[0]
+        st.success(
+            f"Best r found: {best['r']:.4f} | "
+            f"Avg long-run profit: {best['avg_profit_long_run']:.2f} | "
+            f"Total profit: {best['total_profit']:.2f} | "
+            f"Regime: {best['regime']}"
+        )
+
+        top_n = min(10, len(ranking))
+        top_rows = ranking[:top_n]
+
+        st.markdown("### Top r values by long-run average profit")
+        st.dataframe(top_rows, use_container_width=True)
+
+        # Plot profit vs r
+        profit_curve_x = [row["r"] for row in ranking]
+        profit_curve_y = [row["avg_profit_long_run"] for row in ranking]
+        profit_curve_vol = [row["price_volatility"] for row in ranking]
+
+        fig8, ax8 = plt.subplots(figsize=(10, 5))
+        ax8.plot(profit_curve_x, profit_curve_y, linewidth=1.5)
+        ax8.set_title("Average Long-Run Profit vs r")
+        ax8.set_xlabel("r")
+        ax8.set_ylabel("Average long-run profit")
+        ax8.grid(True, alpha=0.3)
+        st.pyplot(fig8)
+
+        fig9, ax9 = plt.subplots(figsize=(10, 5))
+        ax9.plot(profit_curve_x, profit_curve_vol, linewidth=1.5)
+        ax9.set_title("Price Volatility vs r")
+        ax9.set_xlabel("r")
+        ax9.set_ylabel("Price volatility")
+        ax9.grid(True, alpha=0.3)
+        st.pyplot(fig9)
+
+        best_run = run_simulation(
+            r=best["r"],
+            n_consumers=n_consumers,
+            steps=steps,
+            initial_price=initial_price,
+            distribution=distribution,
+            seed=seed,
+            dynamic_wtp=dynamic_wtp,
+            wtp_noise=wtp_noise,
+            use_seasonality=use_seasonality,
+            season_amplitude=season_amplitude,
+            season_period=season_period,
+            unit_cost=unit_cost,
+            fixed_cost_per_step=fixed_cost_per_step,
+        )
+
+        st.markdown("### Best-r simulation output")
+        best_col1, best_col2 = st.columns(2)
+
+        with best_col1:
+            fig10, ax10 = plt.subplots(figsize=(8, 4.5))
+            ax10.plot(best_run["prices"], linewidth=1.5)
+            ax10.set_title(f"Price Time Series at Best r = {best['r']:.4f}")
+            ax10.set_xlabel("Time step")
+            ax10.set_ylabel("Price")
+            ax10.grid(True, alpha=0.3)
+            st.pyplot(fig10)
+
+        with best_col2:
+            fig11, ax11 = plt.subplots(figsize=(8, 4.5))
+            ax11.plot(best_run["cumulative_profit"], linewidth=1.5)
+            ax11.set_title(f"Cumulative Profit at Best r = {best['r']:.4f}")
+            ax11.set_xlabel("Time step")
+            ax11.set_ylabel("Cumulative profit")
+            ax11.grid(True, alpha=0.3)
+            st.pyplot(fig11)
+
+# ----------------------------
+# Interpretation
+# ----------------------------
+st.subheader("Interpretation")
+st.markdown(
+    f"""
+- With **r = {r:.2f}**, the current simulation is classified as **{regime}**.
+- The long-run **average profit** is **{avg_profit:.2f}** and the **total profit** is **{total_profit:.2f}**.
+- The model assumes **profit = price × units sold − unit cost × units sold − fixed cost per step**.
+- This lets you compare not only stability and volatility, but also whether a given pricing aggressiveness actually improves profitability.
+"""
+)
+
+st.subheader("How to run locally")
+st.code(
+    """pip install streamlit numpy matplotlib
+streamlit run pricing_profit_optimizer.py""",
+    language="bash",
+)
