@@ -4,6 +4,8 @@
 
 This project is an interactive **Streamlit-based simulation app** that models a simple algorithmic pricing market and evaluates the resulting **dynamics, volatility, and profitability**.
 
+We simulate a feedback-based algorithmic pricing market, study how the aggressiveness parameter changes system dynamics, and then optimize that parameter for long-run profit while observing the associated volatility and stability trade-offs.
+
 The core idea is that a pricing bot repeatedly updates its price based on observed demand. Consumers decide whether to buy depending on whether the published price is below their personal willingness-to-pay (WTP). Over time, this creates a feedback loop:
 
 - the bot sets a price
@@ -729,6 +731,4 @@ This README is designed to help:
 - document the logic for submissions
 - make the app easier to extend later
 
-If you are using this for a coursework demo, a strong explanation is:
 
-> “We simulate a feedback-based algorithmic pricing market, study how the aggressiveness parameter changes system dynamics, and then optimize that parameter for long-run profit while observing the associated volatility and stability trade-offs.”
