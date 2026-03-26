@@ -10,6 +10,8 @@ Tier 4 : adaptive pricing (Q-learning bot, MPC with smoothness penalty)
 Tier 5 : controllability & welfare (OGY chaos control, consumer surplus, Gini, price CV)
 """
 
+from textwrap import dedent
+
 import numpy as np
 import matplotlib.pyplot as plt
 import streamlit as st
@@ -27,6 +29,109 @@ plt.rcParams.update({
     "axes.spines.top": False, "axes.spines.right": False,
     "figure.dpi": 110,
 })
+
+def apply_custom_ui():
+    st.markdown(
+        dedent(
+            """
+            <style>
+                .stApp {
+                    background: #000000;
+                }
+
+                .block-container {
+                    padding-top: 1.2rem;
+                    padding-bottom: 2rem;
+                    max-width: 1400px;
+                }
+
+                [data-testid="stSidebar"] {
+                    background: #000000;
+                    border-right: 1px solid rgba(255,255,255,0.08);
+                }
+
+                h1, h2, h3 {
+                    letter-spacing: -0.02em;
+                }
+
+                .hero-card {
+                    background: rgba(255,255,255,0.03);
+                    border: 1px solid rgba(255,255,255,0.10);
+                    border-radius: 18px;
+                    padding: 1.1rem 1.2rem;
+                    margin: 0.5rem 0 1rem 0;
+                    box-shadow: 0 10px 30px rgba(0,0,0,0.18);
+                }
+
+                .section-card {
+                    background: rgba(255,255,255,0.03);
+                    border: 1px solid rgba(255,255,255,0.08);
+                    border-radius: 16px;
+                    padding: 0.9rem 1rem;
+                    margin-bottom: 0.8rem;
+                }
+
+                .small-note {
+                    color: rgba(255,255,255,0.72);
+                    font-size: 0.93rem;
+                    line-height: 1.45;
+                }
+
+                div[data-testid="stMetric"] {
+                    background: rgba(255,255,255,0.03);
+                    border: 1px solid rgba(255,255,255,0.08);
+                    border-radius: 14px;
+                    padding: 0.65rem 0.8rem;
+                    min-height: 132px;
+                }
+
+                div[data-testid="stMetricLabel"] {
+                    color: rgba(255,255,255,0.75);
+                }
+
+                div[data-testid="stMetricLabel"] > div {
+                    font-size: 0.95rem;
+                    line-height: 1.25rem;
+                    white-space: normal !important;
+                    word-break: break-word;
+                }
+
+                div[data-testid="stMetricValue"] {
+                    font-size: 2.15rem;
+                    line-height: 1.05;
+                }
+
+                .stTabs [data-baseweb="tab-list"] {
+                    gap: 0.4rem;
+                    flex-wrap: wrap;
+                }
+
+                .stTabs [data-baseweb="tab"] {
+                    background: rgba(255,255,255,0.03);
+                    border: 1px solid rgba(255,255,255,0.08);
+                    border-radius: 12px;
+                    padding: 0.45rem 0.8rem;
+                }
+
+                .stTabs [aria-selected="true"] {
+                    background: rgba(255,255,255,0.08) !important;
+                    border-color: rgba(255,255,255,0.20) !important;
+                }
+
+                .stButton > button {
+                    border-radius: 12px;
+                    font-weight: 600;
+                }
+
+                .stDataFrame, div[data-testid="stTable"] {
+                    border-radius: 14px;
+                    overflow: hidden;
+                }
+            </style>
+            """
+        ),
+        unsafe_allow_html=True,
+    )
 
 # ════════════════════════════════════════════════════════════════
 # PAGE CONFIG
