@@ -10,11 +10,13 @@ Tier 4 : adaptive pricing (Q-learning bot, MPC with smoothness penalty)
 Tier 5 : controllability & welfare (OGY chaos control, consumer surplus, Gini, price CV)
 """
 
+import json
 from textwrap import dedent
 
 import numpy as np
 import matplotlib.pyplot as plt
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 
 try:
@@ -241,6 +243,7 @@ def run_simulation(
     profit     = np.zeros(steps)
     welfare_cs = np.zeros(steps)
     lyap_terms = []
+    frames = []
 
     prices[0] = initial_price
     ref_price = initial_price
@@ -277,6 +280,18 @@ def run_simulation(
 
         # Consumer surplus
         welfare_cs[t] = float(np.sum(np.maximum(0.0, eff_wtp[buy_mask] - p)))
+
+        # Frames for JS live visualisation
+        viz_n = min(240, n_consumers)
+        frames.append({
+            "step": int(t),
+            "price": float(p),
+            "demand": float(demands[t]),
+            "profit": float(profit[t]),
+            "buyers": buy_mask[:viz_n].astype(int).tolist(),
+            "active": active[:viz_n].astype(int).tolist(),
+            "segments": segments[:viz_n].tolist(),
+        })
 
         # Tier 3: Lyapunov term via numerical derivative of the map
         dp_eps  = 1e-4
@@ -343,6 +358,7 @@ def run_simulation(
         "welfare_cs":        welfare_cs,
         "base_wtp":          base_wtp,
         "segments":          segments,
+        "frames":            frames,
         "lyapunov_exponent": float(np.mean(lyap_terms)) if lyap_terms else 0.0,
     }
 
@@ -997,7 +1013,7 @@ tot_prf   = float(np.sum(profit))
 # TABS
 # ════════════════════════════════════════════════════════════════
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "📈 Main Simulation",
     "🔬 Nonlinear Analysis",
     "⚔️  Two-Bot Competition",
@@ -1005,7 +1021,244 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "⚖️  Welfare Analysis",
     "🎯 Profit Optimisation",
     "🧮 Best r for Given Price & Cost",
+    "🎬 Live Market View",
 ])
+# ────────────────────────────────────────────────────────────────
+# TAB 8 — LIVE MARKET VIEW
+# ────────────────────────────────────────────────────────────────
+with tab8:
+    st.subheader("Live Market View")
+    st.caption("Use Play / Pause / Next / Reset to watch the pricing loop unfold over time.")
+
+    frames_json = json.dumps(result["frames"])
+
+    components.html(
+        f"""
+        <html>
+        <head>
+          <style>
+            body {{
+              margin: 0;
+              background: #060b18;
+              color: white;
+              font-family: Arial, sans-serif;
+            }}
+
+            .wrap {{
+              padding: 16px;
+            }}
+
+            .top {{
+              display: flex;
+              flex-wrap: wrap;
+              gap: 16px;
+              margin-bottom: 16px;
+              font-size: 17px;
+              font-weight: 600;
+            }}
+
+            .stat {{
+              background: rgba(255,255,255,0.04);
+              border: 1px solid rgba(255,255,255,0.08);
+              border-radius: 12px;
+              padding: 10px 14px;
+            }}
+
+            .legend {{
+              display: flex;
+              flex-wrap: wrap;
+              gap: 16px;
+              margin: 8px 0 16px 0;
+              font-size: 14px;
+              color: rgba(255,255,255,0.78);
+            }}
+
+            .legend-item {{
+              display: flex;
+              align-items: center;
+              gap: 8px;
+            }}
+
+            .legend-dot {{
+              width: 12px;
+              height: 12px;
+              border-radius: 50%;
+            }}
+
+            .grid {{
+              display: grid;
+              grid-template-columns: repeat(20, 18px);
+              gap: 8px;
+              margin: 18px 0 20px 0;
+              justify-content: start;
+            }}
+
+            .dot {{
+              width: 18px;
+              height: 18px;
+              border-radius: 50%;
+              opacity: 0.35;
+              transition: all 0.18s ease;
+            }}
+
+            .price-sensitive {{ background: #ef4444; }}
+            .mainstream {{ background: #3b82f6; }}
+            .loyal {{ background: #22c55e; }}
+
+            .bought {{
+              opacity: 1;
+              transform: scale(1.2);
+              box-shadow: 0 0 10px rgba(255,255,255,0.35);
+            }}
+
+            .inactive {{
+              opacity: 0.08;
+            }}
+
+            .controls {{
+              display: flex;
+              flex-wrap: wrap;
+              align-items: center;
+              gap: 10px;
+              margin-top: 16px;
+            }}
+
+            .speed-wrap {{
+              display: flex;
+              align-items: center;
+              gap: 10px;
+              margin-left: 8px;
+              color: rgba(255,255,255,0.82);
+              font-size: 14px;
+            }}
+
+            input[type="range"] {{
+              width: 180px;
+              accent-color: #ffffff;
+            }}
+
+            button {{
+              background: #111111;
+              color: white;
+              border: 1px solid #333333;
+              padding: 8px 14px;
+              border-radius: 10px;
+              cursor: pointer;
+              font-weight: 600;
+            }}
+
+            button:hover {{
+              background: #1f1f1f;
+            }}
+          </style>
+        </head>
+        <body>
+          <div class="wrap">
+            <div class="top">
+              <div id="step" class="stat">Step: 0</div>
+              <div id="price" class="stat">Price: 0</div>
+              <div id="demand" class="stat">Demand: 0</div>
+              <div id="profit" class="stat">Profit: 0</div>
+            </div>
+
+            <div class="legend">
+              <div class="legend-item"><span class="legend-dot price-sensitive"></span>Price-sensitive</div>
+              <div class="legend-item"><span class="legend-dot mainstream"></span>Mainstream</div>
+              <div class="legend-item"><span class="legend-dot loyal"></span>Loyal</div>
+              <div class="legend-item"><span class="legend-dot" style="background:#ffffff;"></span>Bright = bought this step</div>
+              <div class="legend-item"><span class="legend-dot" style="background:#666666;"></span>Faded = inactive</div>
+            </div>
+
+            <div id="grid" class="grid"></div>
+
+            <div class="controls">
+              <button onclick="playSim()">Play</button>
+              <button onclick="pauseSim()">Pause</button>
+              <button onclick="nextFrame()">Next</button>
+              <button onclick="resetSim()">Reset</button>
+
+              <div class="speed-wrap">
+                <span>Speed</span>
+                <input id="speedSlider" type="range" min="80" max="1200" value="450" step="20" oninput="updateSpeed(this.value)">
+                <span id="speedLabel">450 ms</span>
+              </div>
+            </div>
+          </div>
+
+          <script>
+            const frames = {frames_json};
+            let idx = 0;
+            let timer = null;
+            let frameDelay = 450;
+
+            function renderFrame(frame) {{
+              document.getElementById("step").innerText = "Step: " + frame.step;
+              document.getElementById("price").innerText = "Price: " + frame.price.toFixed(3);
+              document.getElementById("demand").innerText = "Demand: " + frame.demand.toFixed(3);
+              document.getElementById("profit").innerText = "Profit: " + frame.profit.toFixed(2);
+
+              const grid = document.getElementById("grid");
+              grid.innerHTML = "";
+
+              for (let i = 0; i < frame.buyers.length; i++) {{
+                const dot = document.createElement("div");
+                dot.classList.add("dot");
+
+                const seg = frame.segments[i];
+                if (seg === "price_sensitive") dot.classList.add("price-sensitive");
+                else if (seg === "mainstream") dot.classList.add("mainstream");
+                else if (seg === "loyal") dot.classList.add("loyal");
+                else dot.classList.add("mainstream");
+
+                if (frame.buyers[i] === 1) dot.classList.add("bought");
+                if (frame.active[i] === 0) dot.classList.add("inactive");
+
+                grid.appendChild(dot);
+              }}
+            }}
+
+            function nextFrame() {{
+              if (idx < frames.length) {{
+                renderFrame(frames[idx]);
+                idx += 1;
+              }} else {{
+                pauseSim();
+              }}
+            }}
+
+            function playSim() {{
+              if (timer) return;
+              timer = setInterval(nextFrame, frameDelay);
+            }}
+
+            function pauseSim() {{
+              clearInterval(timer);
+              timer = null;
+            }}
+
+            function updateSpeed(value) {{
+              frameDelay = Number(value);
+              document.getElementById("speedLabel").innerText = frameDelay + " ms";
+              if (timer) {{
+                pauseSim();
+                playSim();
+              }}
+            }}
+
+            function resetSim() {{
+              pauseSim();
+              idx = 0;
+              if (frames.length > 0) renderFrame(frames[0]);
+            }}
+
+            if (frames.length > 0) renderFrame(frames[0]);
+            updateSpeed(frameDelay);
+          </script>
+        </body>
+        </html>
+        """,
+        height=620,
+    )
 
 
 # ────────────────────────────────────────────────────────────────
