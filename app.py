@@ -36,11 +36,11 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-st.title("Volatility Loop: Nonlinear Dynamics in Algorithmic Pricing")
-st.caption(
-    "Lyapunov exponent · Feigenbaum ratio · segmented consumers · churn & re-entry · "
-    "two-bot competition · Q-learning · MPC · OGY chaos control · consumer welfare & Gini"
-)
+st.title("Nonlinear Dynamics in Algorithmic Pricing")
+# st.caption(
+#     "Lyapunov exponent · Feigenbaum ratio · segmented consumers · churn & re-entry · "
+#     "two-bot competition · Q-learning · MPC · OGY chaos control · consumer welfare & Gini"
+# )
 
 # ════════════════════════════════════════════════════════════════
 # CONSUMER GENERATION
