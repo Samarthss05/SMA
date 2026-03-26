@@ -36,11 +36,25 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-st.title("Nonlinear Dynamics in Algorithmic Pricing")
-# st.caption(
-#     "Lyapunov exponent · Feigenbaum ratio · segmented consumers · churn & re-entry · "
-#     "two-bot competition · Q-learning · MPC · OGY chaos control · consumer welfare & Gini"
-# )
+apply_custom_ui()
+st.title("Volatility Loop: Nonlinear Dynamics in Algorithmic Pricing")
+st.markdown(
+    """
+    <div class="hero-card">
+        <div style="font-size:1.05rem; font-weight:700; margin-bottom:0.35rem;">
+            Research sandbox for dynamic pricing, nonlinear instability, and control.
+        </div>
+        <div class="small-note">
+            Explore how pricing aggressiveness, consumer behavior, competition, and control rules affect
+            stability, profit, welfare, bifurcations, and chaos.
+            <br><br>
+            <strong>Includes:</strong> Lyapunov exponent · Feigenbaum ratio · segmented consumers · churn &amp; re-entry ·
+            two-bot competition · Q-learning · MPC · OGY chaos control · consumer welfare &amp; Gini.
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ════════════════════════════════════════════════════════════════
 # CONSUMER GENERATION
