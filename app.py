@@ -7,10 +7,8 @@ import streamlit as st
 import streamlit.components.v1 as components
 from textwrap import dedent
 
-# =========================================================
-# PAGE SETUP
-# =========================================================
 
+# Initialize Page 
 st.set_page_config(
     page_title="ABM Pricing Bot — Optimal r",
     layout="wide",
@@ -117,34 +115,31 @@ st.markdown(
     """
     <div class="hero-card">
         <div style="font-size:1.05rem; font-weight:700; margin-bottom:0.3rem;">
-            A simplified research-style agent-based model for dynamic pricing
+            An agent-based model for dynamic pricing
         </div>
         <div class="small-note">
-            This app studies how the pricing aggressiveness parameter <code>r</code> affects
+            This application hopes to discover how pricing aggressiveness parameter <code>r</code> affects
             long-run profit, volatility, demand stability, and consumer welfare.
             <br><br>
             The pricing bot updates according to:
             <code>P(t+1) = r · P(t) · D(t)</code>
             <br><br>
-            Under a very simple demand assumption, this reduces to the logistic map.
-            In the richer ABM version here, it becomes a more realistic nonlinear pricing system with
+            Under a very simple demand assumption, the equation reduces to the logistic map.<br>
+            To model the randomness in the world, our ABM becomes a more realistic nonlinear pricing system with
             heterogeneous consumers, seasonality, and noisy willingness-to-pay.
         </div>
     </div>
     """,
     unsafe_allow_html=True,
 )
-
-# =========================================================
-# CONSUMER GENERATION
-# =========================================================
+######################################################################################
 
 def generate_segmented_market(n_consumers: int, seed: int = 42):
     rng = np.random.default_rng(seed)
 
-    n_sensitive = int(0.50 * n_consumers)
-    n_mainstream = int(0.35 * n_consumers)
-    n_loyal = n_consumers - n_sensitive - n_mainstream
+    n_sensitive = int(0.50 * n_consumers) # 50% of customers are senstive to price changes, meaning if it increased from 0.1 to 0.2 they will consider
+    n_mainstream = int(0.35 * n_consumers) # 35% are mainstream customers, see, they like, then they buy. Else its chill
+    n_loyal = n_consumers - n_sensitive - n_mainstream # regardless of my price, i will buy 
 
     wtp = np.concatenate([
         rng.beta(1.5, 4.0, n_sensitive),
@@ -166,9 +161,7 @@ def seasonal_multiplier(t: int, amplitude: float = 0.0, period: int = 30):
     return 1.0 + amplitude * np.sin(2 * np.pi * t / period)
 
 
-# =========================================================
-# ABM VISUALIZATION HELPERS
-# =========================================================
+######################################################################################
 
 def build_agent_grid(n_agents: int):
     cols = int(np.ceil(np.sqrt(n_agents)))
@@ -597,9 +590,7 @@ def build_abm_dashboard_html(result, width=1200, height=1380):
     return html, height
 
 
-# =========================================================
-# CORE ABM SIMULATION
-# =========================================================
+# This is my simulation 
 
 def run_simulation(
     r=1.2,
@@ -720,9 +711,6 @@ def run_simulation(
     }
 
 
-# =========================================================
-# DIAGNOSTICS
-# =========================================================
 
 def compute_tail_diagnostics(prices, demands, profit, transient_fraction=0.5):
     start = int(len(profit) * transient_fraction)
@@ -794,10 +782,6 @@ def compute_tail_diagnostics(prices, demands, profit, transient_fraction=0.5):
         "max_price": float(np.max(tail_prices)),
     }
 
-
-# =========================================================
-# CYCLE COUNT ESTIMATION
-# =========================================================
 
 def estimate_cycle_count(tail_prices, tol=0.005):
     """
@@ -880,11 +864,6 @@ def build_sweep_takeaway(best_row, ranking_df):
         f"The best tested value is r = {best_row['r']:.4f}. Compared with the median tested policy, it improves long-run profit by about {uplift:.2f} per step.\n\n"
         + stability_note
     )
-
-
-# =========================================================
-# R SWEEP
-# =========================================================
 
 
 def sweep_r_values(
@@ -1010,9 +989,6 @@ def build_bifurcation_points(
     return np.array(xs, dtype=float), np.array(ys, dtype=float)
 
 
-# =========================================================
-# SIDEBAR
-# =========================================================
 
 st.sidebar.header("Core Parameters")
 r = st.sidebar.slider("Aggressiveness r", 0.0, 4.0, 1.20, 0.01)
@@ -1076,9 +1052,6 @@ regime = classify_regime(
     diagnostics["dominant_period"],
 )
 
-# =========================================================
-# TABS
-# =========================================================
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📈 Main Simulation",
@@ -1088,9 +1061,6 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🎬 ABM Visual",
 ])
 
-# =========================================================
-# TAB 1
-# =========================================================
 
 with tab1:
     st.subheader("Main Simulation Summary")
@@ -1144,9 +1114,6 @@ with tab1:
     st.subheader("Interpretation")
     st.markdown(build_main_takeaway(diagnostics))
 
-# =========================================================
-# TAB 2
-# =========================================================
 
 with tab2:
     st.subheader("Stability Diagnostics")
@@ -1199,9 +1166,6 @@ with tab2:
         st.pyplot(fig)
         plt.close()
 
-# =========================================================
-# TAB 5
-# =========================================================
 
 with tab5:
     st.subheader("Agent-Based Modelling Visual")
@@ -1212,9 +1176,6 @@ with tab5:
     html, html_height = build_abm_dashboard_html(result)
     components.html(html, height=html_height, scrolling=True)
 
-# =========================================================
-# TAB 3
-# =========================================================
 
 with tab3:
     st.subheader("Sweep r and Find the Best Region")
@@ -1380,10 +1341,6 @@ with tab3:
             st.pyplot(fig)
             plt.close()
 
-# =========================================================
-# TAB 4
-# =========================================================
-
 with tab4:
     st.subheader("Consumer Welfare and Segment View")
 
@@ -1444,9 +1401,6 @@ with tab4:
         """
     )
 
-# =========================================================
-# RUN LOCALLY
-# =========================================================
 
 st.divider()
 st.subheader("How to run locally")
