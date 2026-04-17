@@ -941,7 +941,55 @@ def sweep_r_values(
     )
 
     return ranking_df, best_row, best_run
+def sweep_secondary_parameter(param_name, param_values, base_kwargs):
+    """
+    Sweeps a single parameter while holding all others constant at base_kwargs.
+    rows = []
+    for val in param_values:
+        kwargs = base_kwargs.copy()
+        kwargs[param_name] = val
+        
+        # Cast to standard types to avoid numpy type errors in run_simulation
+        if param_name == "n_consumers" or param_name == "season_period":
+            kwargs[param_name] = int(val)
+        else:
+            kwargs[param_name] = float(val)
+            
+        sim = run_simulation(**kwargs)
+        diag = compute_tail_diagnostics(sim["prices"], sim["demands"], sim["profit"])
+        
+        # Calculate avg long-run consumer surplus
+        tail_surplus = float(np.mean(sim["consumer_surplus"][int(0.5 * len(sim["consumer_surplus"])):]))
+        
+        rows.append({
+            param_name: val,
+            "avg_profit_long_run": round(diag["mean_profit"], 4),
+            "price_volatility": round(diag["std_price"], 4),
+            "demand_stability": round(diag["demand_stability"], 4),
+            "consumer_surplus": round(tail_surplus, 4),
+            "regime": classify_regime(diag["cv_price"], diag["demand_stability"], diag["dominant_period"])
+        })
+        
+    return pd.DataFrame(rows)
 
+def run_full_sensitivity_suite(base_kwargs):
+    """
+    Defines the ranges for the 6 secondary parameters and runs the sweeps.
+    """
+    sweeps = {
+        "initial_price": np.linspace(0.01, 1.50, 15),
+        "wtp_noise": np.linspace(0.0, 0.15, 15),
+        "ou_theta": np.linspace(0.01, 0.50, 15),
+        "season_amplitude": np.linspace(0.0, 0.40, 15),
+        "unit_cost": np.linspace(0.0, 0.60, 15),
+        "n_consumers": np.linspace(100, 3000, 15, dtype=int)
+    }
+    
+    results = {}
+    for param, values in sweeps.items():
+        results[param] = sweep_secondary_parameter(param, values, base_kwargs)
+        
+    return results
 # Bifurcation diagram helper
 def build_bifurcation_points(
     r_min,
@@ -1053,12 +1101,13 @@ regime = classify_regime(
 )
 
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📈 Main Simulation",
     "🔬 Stability Diagnostics",
     "🎯 r Sweep Results",
     "⚖️ Consumer Welfare",
     "🎬 ABM Visual",
+    "Sensitivity Analysis - RY added"
 ])
 
 
@@ -1400,6 +1449,62 @@ with tab4:
         - A good `r` should balance **profit**, **stability**, **demand smoothness**, and **consumer experience**.
         """
     )
+
+
+with tab6: # Assuming you added a 6th tab to your st.tabs list
+    st.subheader("Secondary Sensitivity Analyses")
+    st.markdown("Holding all other parameters at their current sidebar values, how does changing one variable impact the long-run model?")
+    
+    if st.button("Run Sensitivity Suite", type="primary"):
+        with st.spinner("Running 90 simulations for sensitivity analysis..."):
+            base_kwargs = {
+                "r": r, "n_consumers": n_consumers, "steps": steps, 
+                "initial_price": initial_price, "seed": seed, 
+                "dynamic_wtp": dynamic_wtp, "ou_theta": ou_theta, 
+                "wtp_noise": wtp_noise, "use_seasonality": use_seasonality, 
+                "season_amplitude": season_amplitude, "season_period": season_period, 
+                "unit_cost": unit_cost, "fixed_cost_per_step": fixed_cost_per_step
+            }
+            
+            st.session_state["sensitivity_results"] = run_full_sensitivity_suite(base_kwargs)
+            
+    if "sensitivity_results" in st.session_state:
+        sens_data = st.session_state["sensitivity_results"]
+        
+        # Create a 3x2 grid of plots for the 6 parameters
+        fig, axes = plt.subplots(3, 2, figsize=(14, 12))
+        axes = axes.flatten()
+        
+        titles = {
+            "initial_price": "Initial Price ($P_0$)",
+            "wtp_noise": "WTP Noise ($\sigma$)",
+            "ou_theta": "Mean Reversion ($\theta$)",
+            "season_amplitude": "Season Amplitude",
+            "unit_cost": "Unit Cost",
+            "n_consumers": "Consumer Count ($N$)"
+        }
+        
+        for idx, (param, df) in enumerate(sens_data.items()):
+            ax = axes[idx]
+            ax2 = ax.twinx() # Second y-axis for volatility
+            
+            # Plot Profit (Green)
+            ax.plot(df[param], df["avg_profit_long_run"], color="#22c55e", marker="o", markersize=4, label="Profit")
+            ax.set_ylabel("Avg Profit", color="#22c55e")
+            ax.tick_params(axis='y', labelcolor="#22c55e")
+            
+            # Plot Volatility (Red)
+            ax2.plot(df[param], df["price_volatility"], color="#ef4444", marker="x", markersize=4, ls="--", label="Volatility")
+            ax2.set_ylabel("Price Volatility", color="#ef4444")
+            ax2.tick_params(axis='y', labelcolor="#ef4444")
+            
+            ax.set_title(titles[param])
+            ax.set_xlabel(param)
+            ax.grid(True, alpha=0.25)
+            
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
 
 
 st.divider()
